@@ -1,0 +1,115 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Git ignore for World-State CR / MoSaiC (LingBot-World fork)
+# Sole source tree: lingbot-world/
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Model weights & local datasets (never commit) ──
+lingbot-world-base-cam/
+dinov2-base/
+clip-vit-base-patch32/
+weights/checkpoints/
+weights/eval/
+*.zip
+*.pth
+*.safetensors
+*.onnx
+*.bin
+# Keep small ChunkSelector checkpoints in git:
+!lingbot-world/assets/selectors/selector_*.pt
+# LoRA / distill adapters stay local (~200MB+)
+lingbot-world/assets/selectors/lora_*.pt
+lingbot-world/assets/selectors/lora_*_history.json
+
+# ── Generated / vendored trees (not the source of truth) ──
+# Portable zip is produced by tools/pack_mosaic.sh — do not edit this copy.
+lingbot-world-mosaic/
+lingbot-world-Quant/
+# Official WorldKV: clone into third_party/WorldKV (see third_party/README.md)
+third_party/WorldKV/
+third_party/WorldKV
+
+# ── Runtime outputs (regeneratable) ──
+output/
+lingbot-world/output/
+lingbot-world/videos/
+lingbot-world/stats/
+artifacts/**
+!artifacts/README.md
+*.log
+clash.stdout.log
+
+# Bench run outputs (keep scripts + subset lists; ignore bulk media)
+lingbot-world/bench/videos/
+lingbot-world/bench/stats/
+lingbot-world/bench/logs/
+lingbot-world/bench/eval/
+lingbot-world/sbs_compare/
+lingbot-world/bench/realcamvid/videos/
+lingbot-world/bench/realcamvid/stats/
+lingbot-world/bench/realcamvid/logs/
+lingbot-world/bench/realcamvid/raw/
+lingbot-world/bench/realcamvid/zips/
+lingbot-world/bench/realcamvid/run200*/
+lingbot-world/bench/realcamvid/run200_vbench*/
+lingbot-world/bench/realcamvid/loop_closure/videos/
+lingbot-world/bench/realcamvid/loop_closure/stats/
+lingbot-world/bench/realcamvid/loop_closure/logs/
+lingbot-world/bench/realcamvid/swtp_rules/videos/
+lingbot-world/bench/realcamvid/swtp_rules/stats/
+lingbot-world/bench/realcamvid/swtp_rules/logs/
+lingbot-world/bench/realcamvid/ff_ab/
+lingbot-world/bench/realcamvid/sweep_ratio/
+lingbot-world/bench/realcamvid/vbench*/
+lingbot-world/bench/realcamvid/distill_*/videos/
+lingbot-world/bench/realcamvid/distill_*/stats/
+lingbot-world/bench/realcamvid/distill_*/logs/
+lingbot-world/bench/realcamvid/distill_*/run.log
+lingbot-world/bench/realcamvid/step_sweep/**/videos/
+lingbot-world/bench/realcamvid/step_sweep/**/stats/
+lingbot-world/bench/realcamvid/step_sweep/run.log
+lingbot-world/bench/realcamvid/mgffn_*/videos/
+lingbot-world/bench/realcamvid/mgffn_*/stats/
+lingbot-world/bench/realcamvid/mgffn_*/run.log
+
+# Generated RealCam-Vid default subset symlinks (build_subsets.sh)
+lingbot-world/bench/realcamvid/clips_default_loop/
+lingbot-world/bench/realcamvid/clips_default_random/
+lingbot-world/bench/realcamvid/clips_default_all/
+lingbot-world/bench/realcamvid/clips/
+lingbot-world/bench/realcamvid/clips_loop/
+lingbot-world/bench/realcamvid/clips_long/
+
+# Optional third-party benches (clone separately)
+lingbot-world/bench/route_b/MIND/
+lingbot-world/bench/route_b/MIND-Data/
+lingbot-world/bench/route_b/co-tracker/
+
+# Large regeneratable / upstream PDFs
+lingbot-world/bench/realcamvid/*.npz
+lingbot-world/LingBot_World_paper.pdf
+*.pdf
+!MoSaiC/**/*.pdf
+
+# ── Python / caches ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+*.egg
+
+# ── OS / IDE / agent ──
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+*~
+
+# Pre-paper archive dumps
+artifacts/archive_pre_paper/

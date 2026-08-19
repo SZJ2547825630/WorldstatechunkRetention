@@ -1,0 +1,306 @@
+\documentclass{article}
+
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+% Primary contribution: World-State Chunk Retention (future-use default).
+\newcommand{\method}{World-State CR}
+\newcommand{\eg}{e.g.,\ }
+\newcommand{\ie}{i.e.,\ }
+
+\title{World-State Chunk Retention for Long-Horizon\\
+Video World Models}
+
+\author{Anonymous Authors}
+
+% Keep \iclrfinalcopy commented for anonymous submission.
+%\iclrfinalcopy
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Autoregressive video world models store long-horizon evidence in key--value
+(KV) caches.  Full history preserves revisits but breaks real-time budgets;
+a sliding window is fast but forgets previously seen viewpoints.
+We argue that the dominant prior practice for deployable world-model
+inference is sliding-window KV, and propose \textbf{Chunk Retention} (CR):
+a three-tier post-generation policy that always keeps a sink and a recent
+window, while ranking older chunks into a capacity-limited archive.
+Our default scorer, \textbf{World-State CR}, is an 11-D pose-aware
+ChunkSelector trained against a \emph{Future Coverage Oracle}: a discounted
+mix of future attention mass and pose/frustum reuse, with corrected
+world-state feature formulas (\texttt{world\_state.v2}).
+Heuristic CR, a 5-D Learned CR, and an attention-mass World-State ablation
+share the same tier budget.  On RealCam-Vid we evaluate revisit fidelity
+with the WorldKV protocol (PSNR / SSIM / LPIPS / FID) together with
+throughput and peak memory, comparing against Sliding Window and
+training-free WorldKV retrieval.  Token-level saliency pruning is optional
+and \emph{not} required for the main claim.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Interactive video world models generate camera- or action-conditioned
+streams autoregressively~\citep{huang2025selfforcing,he2025matrix,
+robbyant2026lingbot}.  Causal attention KV caches provide continuity, but
+context grows with rollout length.  In practice, the widely usable baseline
+for long rollouts is a \textbf{sliding window}: bound active KV, discard
+evicted chunks.  This is cheap, yet fails when the camera returns to a past
+viewpoint---the original scene evidence is gone.
+
+Recent work explores training-free KV retrieval and
+compression~\citep{yi2026worldkv}, gated long-video
+caches~\citep{meng2026tether}, and related temporal compression
+policies~\citep{luo2026future,samuel2026fastar}.  We ask a narrower systems
+question for \emph{chunked} LingBot-World-style generators:
+\begin{quote}
+\emph{Under a fixed active KV budget, which historical chunks should remain
+on device after each new chunk is generated?}
+\end{quote}
+
+Our answer is \textbf{tiered Chunk Retention} with a
+\textbf{world-state} ranking signal trained for \emph{future coverage}
+(Figure~\ref{fig:overview}).  Unlike host-side demote/retrieve graphs or
+heavy token cascades, CR is a post-generation retention policy: generate a
+chunk, then decide what stays in the active attention context.  Dropped
+archive chunks are not recovered later in the rollout---budget discipline
+is explicit.
+
+\begin{figure}[t]
+  \centering
+  \fbox{\begin{minipage}[c][3.2cm][c]{0.94\linewidth}
+  \centering
+  \textbf{Tiered Chunk Retention}\\[2mm]
+  Sink (always) \;/\; Recent (FIFO) \;/\; Archive (ranked).\\[1mm]
+  Archive utility: World-State CR (11-D, Future Coverage Oracle).
+  \end{minipage}}
+  \caption{Prior deployable baseline keeps only a sliding window.
+  \method{} keeps sink\,+\,recent\,+\,a state-ranked archive under the same
+  token budget.  The default ranker is trained for future pose/attention
+  coverage rather than instantaneous attention mass.}
+  \label{fig:overview}
+\end{figure}
+
+\paragraph{Contributions.}
+(1)~A simple three-tier CR skeleton (sink / recent / archive) as the
+retention interface for chunked world models.
+(2)~\textbf{World-State CR} (default): an 11-D ChunkSelector
+(\texttt{world\_state.v2}) trained with a Future Coverage Oracle
+(\texttt{future\_use\_v1}), checkpoint \texttt{selector\_ws\_future\_v1.pt}.
+(3)~Controlled ablations (Heuristic CR, Learned CR, attention-mass
+World-State v1) and comparisons to Sliding Window and WorldKV under a
+WorldKV-style revisit protocol on RealCam-Vid.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Tiered Chunk Retention}
+LingBot-World-Fast generates video in latent chunks of size $C{=}3$.  After
+chunk $t$ is written into the KV cache, history is partitioned into:
+\begin{itemize}
+  \item \textbf{Sink}: the first $S$ chunks (default $S{=}1$), never evicted;
+  \item \textbf{Recent}: the last $R$ chunks (default $R{=}1$), FIFO;
+  \item \textbf{Archive}: older candidates ranked by utility; keep
+        $\max\!\big(K_{\min},\,\lceil \rho N\rceil\big)$ under the attention
+        token budget.
+\end{itemize}
+Default tier ratio is $S{:}R{:}K_{\min}=1{:}1{:}2$ with keep ratio
+$\rho{=}0.5$ (selected by a RealCam-Vid ratio sweep).  Ranking happens
+\emph{after} generation; evicted archive chunks are discarded for the
+remainder of the rollout.
+
+\subsection{Archive scorers}
+\paragraph{Heuristic CR (ablation).}
+Utility is a peak-mean camera/action motion score, fused with latent
+residual rescue for static-camera dynamic content.  No learned weights.
+
+\paragraph{Learned CR (ablation).}
+A tiny MLP over a 5-D feature
+$(\mathrm{motion},\,\mathrm{age},\,\mathrm{cam\text{-}angular},\,
+\mathrm{key\text{-}centroid},\,\mathrm{value\text{-}norm})$ predicts
+utility.  Checkpoint: \texttt{selector\_all4.pt} (schema
+\texttt{learned.v0}).
+
+\paragraph{World-State CR (default).}
+\label{sec:ws-cr}
+We use an 11-D geometric feature layout (schema \texttt{world\_state.v2}):
+motion norm; SE(3) translation / rotation geodesic to the current pose;
+camera-forward overlap; sparse frustum-overlap proxy (pose\,+\,intrinsics,
+no depth); relative motion and reachability over elapsed chunks;
+key-centroid affinity; value norm; soft revisit count; time since last
+observed.  Relative to the frozen v1 formulas, v2 corrects the
+reachability, relative-motion, and time-since-last-observed normalizers
+so that long-horizon rollouts do not saturate.
+
+A small MLP (hidden 32, dropout 2) maps standardized features to a scalar
+utility.  Checkpoint: \texttt{selector\_ws\_future\_v1.pt}.
+
+\paragraph{Future Coverage Oracle.}
+Rather than ranking chunks by instantaneous attention mass at time $t$, we
+train against a \emph{future survival} target over horizon $H$ (default
+$H{=}8$).  For candidate chunk $i$ at step $t$,
+\begin{equation}
+  y_{t,i}
+  =
+  \sum_{h=1}^{H}
+  \gamma^{h-1}
+  \Big[
+    \alpha\,\mathrm{AttnMass}_{t+h}(i)
+    +
+    (1-\alpha)\,\mathrm{PoseReuse}_{t+h}(i)
+  \Big],
+\end{equation}
+with defaults $\gamma{=}0.9$ and $\alpha{=}0.5$.
+$\mathrm{PoseReuse}$ is a cheap frustum\,+\,forward-overlap proxy between
+the stored chunk and a future camera pose.  Labels are converted offline
+from attention-mass oracle dumps (\texttt{train\_selector.py
+--label\_type future\_use\_v1 --feature\_schema v2}); inference remains
+fully causal and uses only the 11-D features above.
+
+\paragraph{World-State CR v1 (ablation).}
+The earlier attention-mass checkpoint \texttt{selector\_ws\_v1.pt}
+(\texttt{world\_state.v1}) shares the same CR skeleton and 11-D layout but
+uses the frozen feature formulas and instantaneous attention-mass labels.
+We report it as an ablation against the default future-use ranker
+(\texttt{world\_state\_cr\_v1} in code).
+
+\subsection{Optional token pruning (not the main claim)}
+Saliency-weighted token pruning inside archive chunks (SWTP) can further
+compress tokens after promotion.  Empirically, residual saliency is a weak
+proxy for revisit utility, so we \textbf{do not} treat SWTP---or the
+CR\,+\,SWTP product name ``MoSaiC''---as central to the paper narrative.
+World-State CR stands alone as the primary method.
+
+\section{Related Work}
+\label{sec:related}
+
+World models with persistent
+memory~\citep{robbyant2026lingbot,xiao2025worldmem,he2025matrix} motivate
+revisit consistency.  WorldKV~\citep{yi2026worldkv} stores evicted KV in a
+bank and retrieves by camera/action similarity, optionally compressing
+tokens at store time.  Our CR instead \emph{irreversibly} sparsifies the
+active context with a learned world-state ranker under a fixed on-device
+budget---complementary to banked retrieval.  Long-video KV
+managers~\citep{meng2026tether,luo2026future,samuel2026fastar} target drift
+or temporal redundancy; we target viewpoint revisits in camera-conditioned
+world rollouts.
+
+\section{Experiments}
+\label{sec:exp}
+
+\paragraph{Setup.}
+Backbone: LingBot-World-Fast (camera-conditioned).  Benchmark: RealCam-Vid
+default battery (\texttt{default\_all}: 24 loop\,+\,40 random clips;
+primary memory results on \texttt{default\_loop}).  Matched seeds and
+resolution; CR uses $\texttt{max\_attention\_size}{=}47000$ and tier ratio
+$1{:}1{:}2$.  Baselines: Sliding Window (\texttt{window}) and official
+WorldKV (\texttt{use\_retrieval}, $\texttt{retrieval\_frames}{=}18$,
+store-time compression, $N{=}2{\times}U{=}4$ on 8$\times$H20).
+
+\paragraph{Metrics (WorldKV protocol).}
+For each GT pose trajectory we detect revisit frames (SE(3) radius $0.15$,
+minimum gap $30$ frames, at most $64$ pairs per clip) and compare each
+revisit frame to its first-visit frame with \textbf{PSNR / SSIM / LPIPS};
+\textbf{FID} between revisit and first-visit sets; plus wall-clock
+\textbf{FPS}, mean attention \textbf{context} tokens, and \textbf{peak}
+GPU memory.
+Heuristic / Learned / World-State v1 are reported as ablations under the
+same CR budget.
+
+\paragraph{Main results.}
+Table~\ref{tab:main-loop} reports the WorldKV revisit protocol on
+\texttt{default\_loop} (24 clips; all have revisit pairs).
+The default \method{} is the future-use ranker
+(\texttt{selector\_ws\_future\_v1.pt} / \texttt{world\_state.v2});
+the attention-mass World-State checkpoint
+(\texttt{selector\_ws\_v1.pt} / \texttt{world\_state.v1}) is shown as an
+ablation under the same CR tiers.
+Relative to Sliding Window, default \method{} improves revisit PSNR /
+SSIM / LPIPS / FID while cutting context tokens by $\sim$48\% and peak
+memory by $\sim$28\%, at higher FPS.  Future-use training further reduces
+FID versus the attention-mass World-State ablation (61.4 vs.\ 66.2) at
+matched efficiency.
+
+\begin{table}[t]
+  \centering
+  \caption{WorldKV revisit protocol on RealCam-Vid \texttt{default\_loop}
+  (24 clips).  Default \method{} = future-use / \texttt{world\_state.v2};
+  World-State v1 = attention-mass ablation.}
+  \label{tab:main-loop}
+  \begin{tabular}{lccccccc}
+  \toprule
+  Method & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & FID$\downarrow$
+         & FPS$\uparrow$ & ctx & peakGB \\
+  \midrule
+  Window & 9.830 & 0.300 & 0.726 & 67.0 & 1.18 & 41471 & 54.7 \\
+  World-State v1 & 10.026 & 0.327 & 0.719 & 66.2
+         & \textbf{1.47} & \textbf{21489} & \textbf{39.2} \\
+  \method{} (default) & \textbf{10.138} & \textbf{0.328} & \textbf{0.713}
+         & \textbf{61.4} & \textbf{1.47} & \textbf{21489} & \textbf{39.2} \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Efficiency takeaway.}
+Both World-State variants retain $\sim$4 chunks under the $1{:}1{:}2$ tier
+policy and share the same FPS / ctx / peakGB; gains of the default
+future-use ranker are therefore attributable to the Future Coverage Oracle
+and \texttt{world\_state.v2} formulas rather than a different budget.
+Sliding Window is neither the most faithful nor the most efficient once a
+world-state archive is available.
+
+\paragraph{Additional comparisons.}
+Official WorldKV and Heuristic / Learned CR ablations use the same
+protocol (\texttt{bench/eval\_worldkv\_memory.py}); CLI names are listed
+in Section~\ref{sec:code}.
+
+\section{Code Alignment}
+\label{sec:code}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+CLI / method & Role \\
+\midrule
+\texttt{window} & Sliding-window baseline \\
+\texttt{heuristic\_cr} & Heuristic CR (ablation) \\
+\texttt{learned\_cr} & Learned CR, 5-D (ablation) \\
+\texttt{world\_state\_cr} & \method{} (default; future-use) \\
+\texttt{world\_state\_cr\_v1} & Attention-mass World-State ablation \\
+\texttt{worldkv} batch & Official WorldKV baseline \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Default checkpoint: \texttt{assets/selectors/selector\_ws\_future\_v1.pt}.
+The former experimental name \texttt{world\_state\_cr\_future} is retained
+as a back-compat alias of \texttt{world\_state\_cr}.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We reframe sparse KV for video world models around
+\textbf{tiered Chunk Retention} and a default \textbf{World-State} archive
+ranker trained for \textbf{future coverage}.  Sliding Window remains the
+practical prior; Heuristic, Learned, and attention-mass World-State are
+ablations; WorldKV is the natural retrieval baseline.  Optional token
+pruning is secondary.  The release matches this terminology
+(\texttt{world\_state\_cr} $\equiv$ future-use default) and the
+WorldKV-style revisit evaluation protocol.
+
+\bibliography{iclr2027_conference}
+\bibliographystyle{iclr2027_conference}
+
+\end{document}

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "source": "RealCam-Vid test split (converted clips in archive)",
+  "archive_root": "artifacts/archive_pre_paper/bench/realcamvid",
+  "subsets": {
+    "default_loop": {
+      "description": "Revisit / loop-closure clips; primary eval for World-State CR",
+      "count": 24,
+      "clip_ids_file": "default_loop.txt",
+      "clips_dir": "clips_default_loop"
+    },
+    "default_random": {
+      "description": "Stratified random forward tours (seed=42); generalization sanity check",
+      "count": 40,
+      "seed": 42,
+      "clip_ids_file": "default_random.txt",
+      "clips_dir": "clips_default_random"
+    },
+    "default_all": {
+      "description": "default_loop + default_random (recommended simple battery)",
+      "count": 64,
+      "clip_ids_file": "default_all.txt",
+      "clips_dir": "clips_default_all"
+    }
+  }
+}
